@@ -44,6 +44,21 @@ jobs:
       - name: Assemble debug and release APKs
         run: ./gradlew --no-daemon --stacktrace assembleDebug assembleRelease
 
+      - name: Verify the debug APK uses the committed debug key
+        run: |
+          set -euo pipefail
+          apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort | tail -1)
+          expected=$(keytool -list -v -keystore keystore/debug.keystore -storepass android -alias androiddebugkey \
+            | grep -m1 'SHA256:' | cut -d: -f2- | tr -d ' :' | tr 'A-F' 'a-f')
+          actual=$("$apksigner" verify --print-certs app/build/outputs/apk/debug/app-debug.apk \
+            | grep -m1 'SHA-256 digest' | awk '{print $NF}' | tr 'A-F' 'a-f')
+          echo "keystore fingerprint: $expected"
+          echo "apk signer fingerprint: $actual"
+          if [ "$expected" != "$actual" ]; then
+            echo "::error::debug APK is not signed with keystore/debug.keystore"
+            exit 1
+          fi
+
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:

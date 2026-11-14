@@ -16,6 +16,18 @@ android {
         versionName = "1.0.0"
     }
 
+    signingConfigs {
+        getByName("debug") {
+            // One fixed debug key, committed on purpose. CI rebuilds must carry the same
+            // certificate or a new build refuses to install over the previous one. This is
+            // the public Android debug identity — never use it to sign a release.
+            storeFile = rootProject.file("keystore/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             // R8 on: shrinking and obfuscation are safe here because the app has no
@@ -26,6 +38,10 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+        }
+
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 

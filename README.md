@@ -46,6 +46,12 @@ wording are not reproduced anywhere.
 Requires JDK 17 and the Android SDK with platform 36. CI does exactly this on every push and pull
 request and publishes the APKs as build artifacts (`.github/workflows/android.yml`).
 
+Debug builds are signed with the keystore committed at `keystore/debug.keystore` (PKCS12, alias
+`androiddebugkey`, store and key password `android`). This is deliberate: a throwaway keystore
+generated per machine would give every CI run a different signature, so a freshly built APK would
+refuse to install over the previous one. One fixed key means CI artifacts install over each other.
+It is the public Android debug identity — never use it to sign a release build.
+
 ## Permissions, and what each is for
 
 | Permission | Why |
