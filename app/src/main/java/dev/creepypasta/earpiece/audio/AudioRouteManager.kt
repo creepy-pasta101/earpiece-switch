@@ -199,6 +199,57 @@ class AudioRouteManager(context: Context) {
         }
     }
 
+    /**
+     * True when [route] is genuinely in effect right now, as opposed to merely requested.
+     *
+     * [currentRoute] cannot answer this: it reports whatever the communication device is
+     * pinned to, and that pin survives an audio-mode takeover. The mode is the load-bearing
+     * part, because the mode is what gets stolen - audio-mode priority belongs to the app
+     * that set it most recently, so a media player resuming playback can reclaim
+     * [AudioManager.MODE_NORMAL] and send media back to the loudspeaker while the
+     * communication device still says EARPIECE. A watchdog that polls this can therefore
+     * notice the takeover that [currentRoute] hides.
+     */
+    @Suppress("DEPRECATION")
+    fun isRouteHeld(route: AudioRoute): Boolean {
+        val am = audioManager ?: return false
+        return try {
+            when (route) {
+                // The mode is the load-bearing half: another app reclaiming MODE_NORMAL is
+                // exactly how this route gets lost. The device half is deliberately lenient,
+                // because a speakerphone flag left over from an earlier SPEAKER apply is stale
+                // here and would otherwise report a working earpiece route as lost.
+                AudioRoute.EARPIECE -> {
+                    val onEarpiece = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        val device = am.communicationDevice
+                        device?.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE ||
+                            (device == null && !am.isSpeakerphoneOn)
+                    } else {
+                        !am.isSpeakerphoneOn
+                    }
+                    am.mode == AudioManager.MODE_IN_COMMUNICATION && onEarpiece
+                }
+
+                // Nobody is holding a communication mode: that is what "speaker" means.
+                AudioRoute.SPEAKER -> am.mode != AudioManager.MODE_IN_COMMUNICATION
+
+                AudioRoute.BLUETOOTH -> am.isBluetoothScoOn ||
+                    findOutputDevice(am, AudioDeviceInfo.TYPE_BLUETOOTH_A2DP) != null
+
+                AudioRoute.WIRED ->
+                    findOutputDevice(am, AudioDeviceInfo.TYPE_WIRED_HEADSET) != null ||
+                        findOutputDevice(am, AudioDeviceInfo.TYPE_WIRED_HEADPHONES) != null ||
+                        findOutputDevice(am, AudioDeviceInfo.TYPE_USB_HEADSET) != null
+            }
+        } catch (e: SecurityException) {
+            Log.w(TAG, "isRouteHeld($route) denied", e)
+            false
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "isRouteHeld($route) failed", e)
+            false
+        }
+    }
+
     // ------------------------------------------------------------ observation
 
     /** Registers a device callback on the main looper; re-registration is a no-op. */
@@ -275,12 +326,17 @@ class AudioRouteManager(context: Context) {
     // ----------------------------------------------------------- API 31+ path
 
     /**
-     * API 31+ branches apply BOTH mechanisms in this order: the legacy mode/flag pair
-     * first (that is what reroutes other apps' media) and the communication-device
-     * selection second (that pins this app's own communication audio).
+     * API 31+ branches use the modern device-selection API *and* the legacy flags, in a
+     * deliberate order per route.
+     *
+     * EARPIECE is the exception to "apply both": the device selection runs first and the
+     * legacy speakerphone flag is only a fallback. Forcing `isSpeakerphoneOn = false`
+     * alongside a successful device selection pushes media onto the voice-call path on
+     * some devices, which is silent — measured on hardware, so the order matters here.
+     * The other branches set their flag unconditionally.
      *
      * isSpeakerphoneOn / isBluetoothScoOn / startBluetoothSco are deprecated on 31+ but
-     * still required: without them the device selection only affects this app's audio,
+     * still required: on their own the device selection only affects this app's audio,
      * which is the bug this class exists to fix.
      */
     @RequiresApi(Build.VERSION_CODES.S)
@@ -288,18 +344,16 @@ class AudioRouteManager(context: Context) {
     private fun applyModern(am: AudioManager, route: AudioRoute): Boolean = when (route) {
         AudioRoute.EARPIECE -> {
             am.mode = AudioManager.MODE_IN_COMMUNICATION
-            // The legacy flag is what actually moves other apps' media to the earpiece.
-            am.isSpeakerphoneOn = false
             val earpiece = findOutputDevice(am, AudioDeviceInfo.TYPE_BUILTIN_EARPIECE)
             if (earpiece == null) {
                 // No earpiece to route to. `when` is this function's body, so this has to be
                 // a branch value rather than an early return.
                 false
             } else {
-                // Pins this app's communication audio too. Its return value is deliberately
-                // ignored: the legacy flag above may be doing the work on its own, so a false
-                // here does not mean the route failed - currentRoute() is the judge.
-                am.setCommunicationDevice(earpiece)
+                val selected = am.setCommunicationDevice(earpiece)
+                // Legacy fallback ONLY: forcing this on devices where the device selection works
+                // routes media into the voice-call path, which can be silent.
+                if (!selected) am.isSpeakerphoneOn = false
                 true
             }
         }

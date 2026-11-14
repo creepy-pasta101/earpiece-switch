@@ -161,28 +161,52 @@ class AudioRouteService : Service() {
     /**
      * Posts the ongoing notification. POST_NOTIFICATIONS may be denied on API 33+; the call still
      * succeeds (the notification is simply not shown) and the service stays foreground.
+     *
+     * The notification is built inside the try as well: a throwing builder must degrade to the same
+     * handled failure path instead of escaping onStartCommand. If the typed start is rejected (some
+     * OEM builds do this even when the manifest declares the type), retry once with type 0.
      */
     private fun startForegroundSafely(route: AudioRoute) {
-        val notification = notifications.build(route)
         try {
-            ServiceCompat.startForeground(
-                this,
-                NOTIFICATION_ID,
-                notification,
+            val notification = notifications.build(route)
+            try {
+                ServiceCompat.startForeground(
+                    this,
+                    NOTIFICATION_ID,
+                    notification,
+                    if (Build.VERSION.SDK_INT >= 34) {
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                    } else {
+                        0
+                    },
+                )
+            } catch (e: RuntimeException) {
+                // ForegroundServiceStartNotAllowedException, InvalidForegroundServiceTypeException
+                // and friends: never crash the process over it. Retrying with type 0 is only
+                // worth attempting below API 34 — from 34 up the platform rejects "type none"
+                // outright ("Starting FGS with type none targetSDK=34 has been prohibited"), so
+                // the retry would fail for a second, different reason and hide the first.
                 if (Build.VERSION.SDK_INT >= 34) {
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-                } else {
-                    0
-                },
-            )
+                    Log.w(TAG, "startForeground rejected", e)
+                    publishServiceFailureOnce(route)
+                    return
+                }
+                Log.w(TAG, "Typed startForeground rejected; retrying with type 0", e)
+                try {
+                    ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, 0)
+                } catch (retry: RuntimeException) {
+                    Log.w(TAG, "startForeground rejected on retry with type 0", retry)
+                    publishServiceFailureOnce(route)
+                    return
+                }
+            }
             if (!foregroundStarted) {
                 foregroundStarted = true
                 RouteState.publishServiceRunning(true)
                 startWatchdog()
             }
         } catch (e: RuntimeException) {
-            // ForegroundServiceStartNotAllowedException and friends: never crash the process over it.
-            Log.w(TAG, "startForeground rejected", e)
+            Log.w(TAG, "startForeground failed", e)
             publishServiceFailureOnce(route)
         }
     }
@@ -314,6 +338,10 @@ class AudioRouteService : Service() {
      * Silently re-applies the requested route when the platform has moved output elsewhere (another
      * app grabbing focus, a device change, an OEM audio policy quirk). No outcome is published here:
      * the user did not ask for this, so a snackbar per drift would be noise.
+     *
+     * The check is mode-aware: [AudioRouteManager.currentRoute] keeps reporting the pinned route
+     * even after another app reclaims MODE_NORMAL (which is what sends media back to the speaker),
+     * so [AudioRouteManager.isRouteHeld] is what actually tells us whether the route is in effect.
      */
     private fun reassertIfDrifted() {
         // Never fight an active phone call for the audio path. The user's call wins over
@@ -329,16 +357,16 @@ class AudioRouteService : Service() {
             requested
         }
 
-        val current = try {
-            manager.currentRoute()
+        val held = try {
+            manager.isRouteHeld(expected)
         } catch (e: RuntimeException) {
-            Log.d(TAG, "Watchdog could not read the current route", e)
+            Log.d(TAG, "Watchdog could not read whether $expected is held", e)
             return
         }
 
-        if (current == expected) return
+        if (held) return
 
-        Log.d(TAG, "Watchdog: route drifted from $expected to $current; re-asserting $requested")
+        Log.d(TAG, "Watchdog: $expected is no longer in effect; re-asserting $requested")
         val applied = try {
             manager.apply(requested)
         } catch (e: SecurityException) {
@@ -376,8 +404,12 @@ class AudioRouteService : Service() {
     companion object {
         private const val TAG = "Earpiece"
 
-        /** How often the foreground watchdog compares the live route with the requested one. */
-        private const val WATCHDOG_INTERVAL_MS = 4_000L
+        /**
+         * How often the foreground watchdog checks that the route is still held. Another app can
+         * reclaim the audio mode (and with it the output path) at any moment, so a 2 s tick keeps a
+         * stolen route from staying lost for long.
+         */
+        private const val WATCHDOG_INTERVAL_MS = 2_000L
 
         const val ACTION_APPLY = "dev.creepypasta.earpiece.action.APPLY"
         const val ACTION_RELEASE = "dev.creepypasta.earpiece.action.RELEASE"
