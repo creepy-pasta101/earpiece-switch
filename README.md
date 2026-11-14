@@ -98,6 +98,19 @@ works — and it means two things you should know:
 The route you asked for and the route the platform confirmed are both shown: a card is only marked
 active once the platform has been read back and agrees.
 
+### Why there is no entry in the media output switcher
+
+A virtual output that appears in Samsung's (or any) system media switcher cannot be published by
+an ordinary app. Publishing a route uses `MediaRoute2ProviderService`, and a route that stands in
+for *system audio* — which is what "send this app's music to that output" would require — is gated
+behind `MODIFY_AUDIO_ROUTING`, a privileged permission no installable app can hold. Even a
+published route only helps apps that use `MediaRouter2` and hand their stream over to the route's
+provider; it does not take over another app's playback.
+
+What this app does instead is the thing that does work: it holds the platform's communication audio
+path, so every app's media lands on the earpiece. The Quick Settings tile is the fast control, and
+long-pressing it opens the output picker.
+
 ## Layout
 
 ```
