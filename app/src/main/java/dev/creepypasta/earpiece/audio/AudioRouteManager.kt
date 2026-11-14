@@ -24,7 +24,13 @@ import dev.creepypasta.earpiece.model.RouteResolver
  * The device-selection API alone is not enough: it selects the communication device for
  * *this* app's audio only. Moving media played by *other* apps is the whole purpose of
  * this app, and that still requires the legacy [AudioManager.setMode] +
- * [AudioManager.setSpeakerphoneOn] pair. So every branch applies both, unconditionally.
+ * [AudioManager.setSpeakerphoneOn] pair. So every branch applies both, unconditionally
+ * — but only when the platform is not already in the state that branch would set.
+ *
+ * [apply] is idempotent: the service's watchdog re-applies the desired route every few
+ * seconds, and each redundant platform call reconfigures the audio path (an audible gap)
+ * and briefly bounces media to the loudspeaker. When [isAlreadyApplied] reports the
+ * platform already matches, [apply] touches nothing at all.
  *
  * No exception is ever allowed to escape a public method: audio APIs throw
  * [SecurityException] when a permission (BLUETOOTH_CONNECT, MODIFY_AUDIO_SETTINGS)
@@ -102,6 +108,24 @@ class AudioRouteManager(context: Context) {
     }
 
     /**
+     * The platform's built-in earpiece output, or null when it cannot be enumerated.
+     * Backs the service's device pinning; a missing device is reported as null rather
+     * than guessed at.
+     */
+    fun earpieceDevice(): AudioDeviceInfo? {
+        val am = audioManager ?: return null
+        return try {
+            findOutputDevice(am, AudioDeviceInfo.TYPE_BUILTIN_EARPIECE)
+        } catch (e: SecurityException) {
+            Log.w(TAG, "earpieceDevice denied", e)
+            null
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "earpieceDevice failed", e)
+            null
+        }
+    }
+
+    /**
      * True while the platform is in a telephony call.
      *
      * The route watchdog uses this to stand down: forcing an audio mode or a device while a
@@ -122,6 +146,12 @@ class AudioRouteManager(context: Context) {
      * Resolves [route] against the live capabilities, applies the effective
      * route and returns the *verified* active route read back from the platform.
      *
+     * Idempotent: when the platform already matches [isAlreadyApplied], no platform call
+     * is issued at all — nothing is reconfigured, nothing is slept on, nothing is retried.
+     * The watchdog calls this every couple of seconds, and each redundant setMode /
+     * setCommunicationDevice would otherwise cut media out for about a second and bounce it
+     * to the loudspeaker.
+     *
      * The platform's audio policy can lag a transition by a few hundred milliseconds,
      * so a single read-back is not proof. If the first read-back disagrees with the
      * requested route the branch is applied once more and read back again; the route is
@@ -134,6 +164,14 @@ class AudioRouteManager(context: Context) {
 
         // An unavailable request is downgraded through the resolver, never forced.
         val effective = RouteResolver.resolve(route, capabilities()).effective
+
+        // Nothing to do: the platform is already in the state this route would set. Return
+        // the effective route rather than a read-back, because no read-back was needed and
+        // no platform call was made to verify.
+        if (isAlreadyApplied(am, effective)) {
+            Log.d(TAG, "apply($route) already applied as $effective, no platform change")
+            return effective
+        }
 
         captureStateOnce(am)
 
@@ -159,6 +197,85 @@ class AudioRouteManager(context: Context) {
 
         Log.w(TAG, "apply($route) unverified: wanted $effective, platform reports $second")
         return null
+    }
+
+    /**
+     * True when the platform is already in the state [route] would set, so [apply] can skip
+     * every platform call for it.
+     *
+     * Deliberately conservative: any exception reports false ("not yet applied"), which
+     * falls through to applying the route — the safe direction, since a wrongly skipped
+     * apply would leave the route unset while a wrongly issued apply only costs one glitch.
+     */
+    @Suppress("DEPRECATION")
+    private fun isAlreadyApplied(am: AudioManager, route: AudioRoute): Boolean = try {
+        when (route) {
+            AudioRoute.EARPIECE -> {
+                val earpiece = findOutputDevice(am, AudioDeviceInfo.TYPE_BUILTIN_EARPIECE)
+                if (earpiece == null) {
+                    false
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    // The mode must be part of this test, not just the device pin. The pin
+                    // survives another app reclaiming MODE_NORMAL, and that reclaim is exactly
+                    // how the route gets lost — without the mode term the watchdog would detect
+                    // the drift, call apply(), and be skipped as "already applied" while the
+                    // audio sits on the loudspeaker.
+                    am.mode == AudioManager.MODE_IN_COMMUNICATION &&
+                        am.communicationDevice?.id == earpiece.id
+                } else {
+                    am.mode == AudioManager.MODE_IN_COMMUNICATION && !am.isSpeakerphoneOn
+                }
+            }
+
+            // applyModern()/applyLegacy() clear the selection, drop SCO, raise the
+            // speakerphone flag and return to MODE_NORMAL for this route.
+            AudioRoute.SPEAKER -> {
+                val noSelection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    am.communicationDevice == null
+                } else {
+                    true
+                }
+                noSelection &&
+                    am.isSpeakerphoneOn &&
+                    am.mode == AudioManager.MODE_NORMAL
+            }
+
+            // Either an SCO link is already up, or the A2DP path is already in charge:
+            // nothing selected, no SCO device to move to, and the mode is normal.
+            AudioRoute.BLUETOOTH -> {
+                val noSelection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    am.communicationDevice == null
+                } else {
+                    true
+                }
+                val a2dpOnly =
+                    findOutputDevice(am, AudioDeviceInfo.TYPE_BLUETOOTH_SCO) == null &&
+                        findOutputDevice(am, AudioDeviceInfo.TYPE_BLUETOOTH_A2DP) != null
+                am.isBluetoothScoOn ||
+                    (a2dpOnly && noSelection && am.mode == AudioManager.MODE_NORMAL)
+            }
+
+            // A wired headset is auto-routed for media, so "applied" is exactly: the
+            // headset is present, nothing is selected and the mode is normal.
+            AudioRoute.WIRED -> {
+                val hasWired =
+                    findOutputDevice(am, AudioDeviceInfo.TYPE_WIRED_HEADSET) != null ||
+                        findOutputDevice(am, AudioDeviceInfo.TYPE_WIRED_HEADPHONES) != null ||
+                        findOutputDevice(am, AudioDeviceInfo.TYPE_USB_HEADSET) != null
+                val noSelection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    am.communicationDevice == null
+                } else {
+                    true
+                }
+                hasWired && noSelection && am.mode == AudioManager.MODE_NORMAL
+            }
+        }
+    } catch (e: SecurityException) {
+        Log.w(TAG, "isAlreadyApplied($route) denied", e)
+        false
+    } catch (e: RuntimeException) {
+        Log.w(TAG, "isAlreadyApplied($route) failed", e)
+        false
     }
 
     /** Runs one platform branch; never lets a platform exception escape. */

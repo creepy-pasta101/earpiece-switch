@@ -15,6 +15,7 @@ import android.util.Log
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import dev.creepypasta.earpiece.audio.AudioRouteManager
+import dev.creepypasta.earpiece.audio.SilentKeepAlive
 import dev.creepypasta.earpiece.data.RoutePreferences
 import dev.creepypasta.earpiece.model.AudioRoute
 import dev.creepypasta.earpiece.model.RouteCapabilities
@@ -43,6 +44,7 @@ class AudioRouteService : Service() {
     private val audioScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private lateinit var manager: AudioRouteManager
+    private lateinit var keepAlive: SilentKeepAlive
     private lateinit var prefs: RoutePreferences
     private lateinit var notifications: RouteNotifications
 
@@ -72,6 +74,8 @@ class AudioRouteService : Service() {
     override fun onCreate() {
         super.onCreate()
         manager = AudioRouteManager(this)
+        // Created here so onDestroy always has an instance to stop, even if no route was applied.
+        keepAlive = SilentKeepAlive(this)
         prefs = RoutePreferences(this)
         notifications = RouteNotifications(this)
         notifications.ensureChannel()
@@ -123,6 +127,9 @@ class AudioRouteService : Service() {
             }
 
             ACTION_RELEASE -> {
+                // The service is going away: hand the communication path back before stopping, so
+                // the silent stream is not left holding it until onDestroy runs.
+                keepAlive.stop()
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -151,6 +158,9 @@ class AudioRouteService : Service() {
             noisyReceiverRegistered = false
         }
 
+        // Drop the silent stream before releasing the manager: the stream holds the very audio
+        // path the manager is about to reset.
+        keepAlive.stop()
         manager.stopObserving()
         manager.release()
         // Cancels the watchdog loop along with everything else this service started.
@@ -273,6 +283,9 @@ class AudioRouteService : Service() {
                     RouteState.publishRequested(resolved.requested)
                 }
                 Log.i(TAG, "Route applied: requested=$route active=$applied")
+                // Match the keep-alive to the route that was actually applied, not the requested
+                // one: a downgrade to the speaker must not leave a stream holding the earpiece.
+                syncKeepAlive(applied)
             } else {
                 val failure = failureReason(route, caps)
                 RouteState.publishOutcome(
@@ -379,6 +392,36 @@ class AudioRouteService : Service() {
         // Keep the published active route honest, but stay silent: no outcome, no snackbar.
         if (applied != null) {
             RouteState.publishActive(applied)
+            // The re-apply may have rebuilt the path (or lost it), so the keep-alive follows it.
+            syncKeepAlive(applied)
+        }
+    }
+
+    /**
+     * Keeps the silent keep-alive stream in step with [applied]: only the earpiece needs the
+     * communication path held open, every other route wants it handed back.
+     *
+     * Called from work already running on [audioScope], because building an AudioTrack is platform
+     * audio work that must not touch the main thread. A keep-alive that refuses to start is logged
+     * at warn and nothing else: the route itself still works, so no failure outcome is published
+     * for it — the user never asked for a stream, and a snackbar here would be noise.
+     */
+    private fun syncKeepAlive(applied: AudioRoute) {
+        if (applied == AudioRoute.EARPIECE) {
+            val started = try {
+                keepAlive.start(manager.earpieceDevice())
+            } catch (e: SecurityException) {
+                Log.w(TAG, "keep-alive start denied for $applied", e)
+                false
+            } catch (e: RuntimeException) {
+                Log.w(TAG, "keep-alive start failed for $applied", e)
+                false
+            }
+            if (!started) {
+                Log.w(TAG, "Silent keep-alive did not start for $applied; route is still applied")
+            }
+        } else {
+            keepAlive.stop()
         }
     }
 
@@ -405,11 +448,13 @@ class AudioRouteService : Service() {
         private const val TAG = "Earpiece"
 
         /**
-         * How often the foreground watchdog checks that the route is still held. Another app can
-         * reclaim the audio mode (and with it the output path) at any moment, so a 2 s tick keeps a
-         * stolen route from staying lost for long.
+         * How often the foreground watchdog checks that the route is still held. With the silent
+         * keep-alive stream holding the communication path, the watchdog is a safety net rather
+         * than the primary mechanism — the route is not ours to re-assert every couple of seconds
+         * any more, and a slower 5 s tick means fewer needless re-applications (each of which
+         * reconfigures the path and costs a dropout).
          */
-        private const val WATCHDOG_INTERVAL_MS = 2_000L
+        private const val WATCHDOG_INTERVAL_MS = 5_000L
 
         const val ACTION_APPLY = "dev.creepypasta.earpiece.action.APPLY"
         const val ACTION_RELEASE = "dev.creepypasta.earpiece.action.RELEASE"
