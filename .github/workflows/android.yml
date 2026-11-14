@@ -1,8 +1,10 @@
 name: Android CI
 
 on:
+  # Feature branches are covered by the pull_request trigger; building them on push as
+  # well would run every commit twice and upload duplicate artifacts.
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
     branches: ["**"]
   workflow_dispatch:

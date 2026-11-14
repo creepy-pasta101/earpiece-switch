@@ -37,7 +37,6 @@
 
     <!-- Messages -->
     <string name="downgrade_note">%1$s isn\'t available right now. Using %2$s.</string>
-    <string name="msg_route_applied">Audio moved to %1$s</string>
     <string name="msg_route_failed">Couldn\'t switch to %1$s</string>
     <string name="msg_bluetooth_denied">Bluetooth permission is needed to switch to Bluetooth</string>
 
