@@ -120,6 +120,28 @@ The mechanism that always works is the one described above: holding the communic
 which puts every app's media on the earpiece. The Quick Settings tile is the fast control, and
 long-pressing it opens the output picker.
 
+### The Quick Settings detail panel
+
+On One UI, tapping a tile's *label* can expand a detail panel inside the shade — the same view you
+get when long-pressing the Wi-Fi tile. That is a Samsung extension, not public Android: Samsung's
+SystemUI looks for `sem*` methods on the `TileService` subclass (`semGetDetailView`,
+`semGetDetailViewTitle`, `semIsToggleButtonExists`, `semSetToggleButtonChecked`, …) and renders the
+`RemoteViews` they return. AOSP's third-party tile path knows nothing about it and only offers
+`ACTION_QS_TILE_PREFERENCES`, which launches an activity.
+
+So the tile behaves like a Samsung system tile where that hook exists, and like a plain AOSP tile
+everywhere else:
+
+| Gesture | One UI | Other Android |
+| --- | --- | --- |
+| Tap the icon | hold the earpiece / release | same |
+| Tap the label | detail panel listing the four outputs | nothing |
+| Long-press | preferences screen | preferences screen |
+
+The panel is a `RemoteViews` layout (`res/layout/qs_route_detail.xml`), so its rows are plain
+`TextView`s wired with `PendingIntent`s into `AudioRouteService`, not Compose. If Samsung changes or
+removes these hooks, the panel simply stops appearing and nothing else breaks.
+
 ## Layout
 
 ```
