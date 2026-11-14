@@ -52,7 +52,7 @@ class EarpieceRouteProvider : MediaRoute2ProviderService() {
     override fun onCreateSession(
         requestId: Long,
         routeId: String,
-        sessionId: String?,
+        sessionId: String,
         sessionHints: Bundle?,
     ) {
         triggerAndReject(requestId, routeId)
@@ -63,7 +63,7 @@ class EarpieceRouteProvider : MediaRoute2ProviderService() {
      * against minSdk 26 / targetSdk 36.
      */
     @Suppress("DEPRECATION")
-    override fun onSelectRoute(requestId: Long, routeId: String) {
+    override fun onSelectRoute(requestId: Long, routeId: String, sessionId: String) {
         triggerAndReject(requestId, routeId)
     }
 
