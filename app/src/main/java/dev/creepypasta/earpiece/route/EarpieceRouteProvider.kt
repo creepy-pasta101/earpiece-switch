@@ -72,6 +72,19 @@ class EarpieceRouteProvider : MediaRoute2ProviderService() {
         triggerAndReject(requestId, routeId)
     }
 
+    /**
+     * Abstract in this SDK (deprecated in later ones). Deselecting our route must not switch
+     * anything — we only ever act on selection — so the request is simply rejected.
+     */
+    @Suppress("DEPRECATION")
+    override fun onDeselectRoute(requestId: Long, routeId: String, sessionId: String) {
+        try {
+            notifyRequestFailed(requestId, MediaRoute2ProviderService.REASON_REJECTED)
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "Could not reject the deselect request", e)
+        }
+    }
+
     override fun onReleaseSession(requestId: Long, sessionId: String) {
         // We never create a session, so there is nothing to release.
     }
