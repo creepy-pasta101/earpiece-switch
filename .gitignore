@@ -25,11 +25,16 @@ captures/
 *.ap_
 *.dex
 
-# Signing material — never commit these
+# Signing material — never commit these, with one deliberate exception below.
 *.keystore
 *.jks
 keystore.properties
 signing.properties
+
+# ... except the single debug key, which is committed on purpose so that CI builds are
+# signed with a stable certificate and install over each other. It is the public Android
+# debug identity (alias androiddebugkey, password android) — never a release key.
+!keystore/debug.keystore
 
 # OS noise
 .DS_Store
