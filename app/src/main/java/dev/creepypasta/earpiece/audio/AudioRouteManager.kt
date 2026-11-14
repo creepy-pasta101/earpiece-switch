@@ -291,12 +291,17 @@ class AudioRouteManager(context: Context) {
             // The legacy flag is what actually moves other apps' media to the earpiece.
             am.isSpeakerphoneOn = false
             val earpiece = findOutputDevice(am, AudioDeviceInfo.TYPE_BUILTIN_EARPIECE)
-                ?: return false
-            // Pins this app's communication audio too. Its return value is deliberately
-            // ignored: the legacy flag above may be doing the work on its own, so a false
-            // here does not mean the route failed - currentRoute() is the judge.
-            am.setCommunicationDevice(earpiece)
-            true
+            if (earpiece == null) {
+                // No earpiece to route to. `when` is this function's body, so this has to be
+                // a branch value rather than an early return.
+                false
+            } else {
+                // Pins this app's communication audio too. Its return value is deliberately
+                // ignored: the legacy flag above may be doing the work on its own, so a false
+                // here does not mean the route failed - currentRoute() is the judge.
+                am.setCommunicationDevice(earpiece)
+                true
+            }
         }
 
         AudioRoute.SPEAKER -> {
@@ -314,19 +319,22 @@ class AudioRouteManager(context: Context) {
             val anyBluetooth = sco != null ||
                 findOutputDevice(am, AudioDeviceInfo.TYPE_BLUETOOTH_A2DP) != null
             if (!anyBluetooth) {
-                return false
-            }
-            am.isSpeakerphoneOn = false
-            if (sco != null && am.mode == AudioManager.MODE_IN_COMMUNICATION) {
-                am.setCommunicationDevice(sco)
-                am.isBluetoothScoOn = true
-                am.startBluetoothSco()
+                // Nothing to route to. `when` is the body of this function, so this has to
+                // be a branch value rather than an early return.
+                false
             } else {
-                // A2DP is routed automatically; drop any explicit selection.
-                am.clearCommunicationDevice()
-                am.mode = AudioManager.MODE_NORMAL
+                am.isSpeakerphoneOn = false
+                if (sco != null && am.mode == AudioManager.MODE_IN_COMMUNICATION) {
+                    am.setCommunicationDevice(sco)
+                    am.isBluetoothScoOn = true
+                    am.startBluetoothSco()
+                } else {
+                    // A2DP is routed automatically; drop any explicit selection.
+                    am.clearCommunicationDevice()
+                    am.mode = AudioManager.MODE_NORMAL
+                }
+                true
             }
-            true
         }
 
         AudioRoute.WIRED -> {
