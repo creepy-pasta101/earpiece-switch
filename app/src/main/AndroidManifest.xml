@@ -44,6 +44,19 @@
             </intent-filter>
         </activity>
 
+        <!-- Long-pressing the tile opens this; the intent-filter is what replaces the
+             system's default "App info" long-press behaviour. -->
+        <activity
+            android:name=".tile.TilePreferencesActivity"
+            android:exported="true"
+            android:label="@string/tile_prefs_title"
+            android:theme="@style/Theme.Earpiece">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
         <!-- Started with explicit intents only; never exported. -->
         <service
             android:name="dev.creepypasta.earpiece.service.AudioRouteService"

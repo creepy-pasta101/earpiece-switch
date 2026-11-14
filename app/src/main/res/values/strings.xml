@@ -3,6 +3,8 @@
 
     <string name="app_name">Earpiece</string>
     <string name="tile_label">Earpiece</string>
+    <string name="tile_prefs_title">Output</string>
+    <string name="tile_state_off">Off</string>
 
     <!-- Routes -->
     <string name="route_earpiece">Earpiece</string>

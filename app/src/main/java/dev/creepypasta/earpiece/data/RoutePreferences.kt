@@ -17,7 +17,9 @@ class RoutePreferences(context: Context) {
     /** Last route the user asked for; SPEAKER when nothing usable is stored. */
     var requestedRoute: AudioRoute
         get() = AudioRoute.fromKey(prefs.getString(KEY_REQUESTED_ROUTE, null))
-            ?: AudioRoute.SPEAKER
+            // Earpiece by default: that is the reason someone installs this app. It only
+            // applies to a fresh install — once the user has chosen, their choice is stored.
+            ?: AudioRoute.EARPIECE
         set(value) {
             prefs.edit().putString(KEY_REQUESTED_ROUTE, value.key).apply()
         }
