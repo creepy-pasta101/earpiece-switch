@@ -98,17 +98,26 @@ works — and it means two things you should know:
 The route you asked for and the route the platform confirmed are both shown: a card is only marked
 active once the platform has been read back and agrees.
 
-### Why there is no entry in the media output switcher
+### The experimental output-switcher route
 
-A virtual output that appears in Samsung's (or any) system media switcher cannot be published by
-an ordinary app. Publishing a route uses `MediaRoute2ProviderService`, and a route that stands in
-for *system audio* — which is what "send this app's music to that output" would require — is gated
-behind `MODIFY_AUDIO_ROUTING`, a privileged permission no installable app can hold. Even a
-published route only helps apps that use `MediaRouter2` and hand their stream over to the route's
-provider; it does not take over another app's playback.
+`EarpieceRouteProvider` publishes a media route so the earpiece can be picked from the system
+output switcher. It is a **selector, not an output**: it carries no audio. When the system asks us
+to create a session or transfer to the route, we switch the device's audio to the earpiece and then
+reject the session, so the media app keeps playing locally instead of handing its playback to an
+app that cannot play it.
 
-What this app does instead is the thing that does work: it holds the platform's communication audio
-path, so every app's media lands on the earpiece. The Quick Settings tile is the fast control, and
+Three limits are worth knowing before relying on it:
+
+- **It cannot pretend to be the phone speaker.** `notifyRoutes` rewrites any system route type
+  published by a non-system provider to `TYPE_UNKNOWN`, so the switcher shows a generic named
+  output, not a built-in speaker.
+- **Whether it is listed at all is the OEM's call.** SystemUI scans for route providers to fill the
+  output switcher, but a third-party generic route is not guaranteed to be rendered.
+- **Selection depends on the media app.** The transfer is rejected, so a player that treats a
+  failed transfer as fatal may stop instead of continuing on the earpiece.
+
+The mechanism that always works is the one described above: holding the communication audio path,
+which puts every app's media on the earpiece. The Quick Settings tile is the fast control, and
 long-pressing it opens the output picker.
 
 ## Layout

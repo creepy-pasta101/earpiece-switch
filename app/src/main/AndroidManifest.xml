@@ -88,6 +88,18 @@
                 android:value="true" />
         </service>
 
+        <!-- Experimental: a dummy media route so the earpiece can be picked from the
+             system output switcher. It carries no audio; selecting it only triggers the
+             route switch. BIND_ROUTE_PROVIDER is what the system router binds with. -->
+        <service
+            android:name=".route.EarpieceRouteProvider"
+            android:exported="true"
+            android:permission="android.permission.BIND_ROUTE_PROVIDER">
+            <intent-filter>
+                <action android:name="android.media.MediaRoute2ProviderService" />
+            </intent-filter>
+        </service>
+
     </application>
 
 </manifest>
