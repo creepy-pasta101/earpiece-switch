@@ -1,5 +1,6 @@
 package dev.creepypasta.earpiece.tile
 
+import android.app.AlertDialog
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.service.quicksettings.Tile
@@ -18,11 +19,13 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 /**
- * Quick Settings tile: one tap holds [AudioRoute.EARPIECE], the next tap releases it.
+ * Quick Settings tile: one tap opens the output picker, where any of the four routes can be held
+ * or the current hold released ("Off").
  *
- * The tap is deliberately independent of the persisted preference: the tile is a shortcut between
- * the two outputs people switch between most (earpiece and speaker), so it always does the same
- * thing instead of replaying whatever was last requested elsewhere in the app.
+ * The picker is shown with [TileService.showDialog], which renders it in the Quick Settings dialog
+ * style and lets SystemUI collapse the panel around it. A third-party tile cannot draw its own
+ * content inside the shade and cannot intercept the long-press (the platform always routes that to
+ * the QS_TILE_PREFERENCES activity), so the tap is the only supported entry point.
  *
  * The tile mirrors [RouteState.serviceRunning] and [RouteState.active] — the subtitle names the
  * route actually held. A listener is only alive between onStartListening and onStopListening so no
@@ -63,11 +66,12 @@ class RouteTileService : TileService() {
     override fun onClick() {
         super.onClick()
         try {
-            if (RouteState.serviceRunning.value) {
-                // Returns the device to the speaker.
-                AudioRouteService.release(this)
+            if (isLocked) {
+                // A dialog shown while the device is locked is not visible, so unlock first and
+                // open the picker from the unlock callback.
+                unlockAndRun { showRoutePicker() }
             } else {
-                AudioRouteService.apply(this, AudioRoute.EARPIECE)
+                showRoutePicker()
             }
         } catch (e: RuntimeException) {
             // ForegroundServiceStartNotAllowedException when the app is in the background on
@@ -87,6 +91,54 @@ class RouteTileService : TileService() {
         collectJob = null
         scope?.cancel()
         scope = null
+    }
+
+    /**
+     * Single-choice picker over the four routes plus "Off" as the last entry.
+     *
+     * Shown through [TileService.showDialog] rather than [AlertDialog.show]: only the former gives
+     * the dialog the Quick Settings window type and lets SystemUI collapse the panel correctly.
+     */
+    private fun showRoutePicker() {
+        try {
+            // One source of truth for the order, so an index means the same route in both
+            // directions and a new route cannot be silently left out of the picker.
+            val routes = AudioRoute.all
+            val offIndex = routes.size
+            val items = routes.map { getString(labelResFor(it)) } + getString(R.string.tile_state_off)
+
+            // Tick the held route, or "Off" when nothing is held.
+            val checkedIndex = if (RouteState.serviceRunning.value) {
+                val activeIndex = routes.indexOf(RouteState.active.value)
+                // A held route the list does not cover falls back to "Off" rather than ticking a
+                // row that is not the held one.
+                if (activeIndex >= 0) activeIndex else offIndex
+            } else {
+                offIndex
+            }
+
+            // The listener needs a handle on the dialog to dismiss it. Build it first into a
+            // non-null local (showDialog requires a non-null Dialog), then publish it to the
+            // nullable holder the listener closes over.
+            var dialog: AlertDialog? = null
+            val built = AlertDialog.Builder(this)
+                .setTitle(R.string.tile_prefs_title)
+                .setSingleChoiceItems(items.toTypedArray(), checkedIndex) { _, which ->
+                    if (which == offIndex) {
+                        // Returns the device to the speaker.
+                        AudioRouteService.release(this)
+                    } else {
+                        AudioRouteService.apply(this, routes[which])
+                    }
+                    dialog?.dismiss()
+                    refreshTile()
+                }
+                .create()
+            dialog = built
+            showDialog(built)
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "Unable to show route picker", e)
+        }
     }
 
     private fun refreshTile() {
