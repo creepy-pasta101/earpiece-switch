@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Background layer of the adaptive launcher icon: deep desaturated purple. -->
+<resources>
+
+    <color name="ic_launcher_background">#FF2A2433</color>
+
+</resources>

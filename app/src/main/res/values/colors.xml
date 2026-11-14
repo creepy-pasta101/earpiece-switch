@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Fallback palette used only when dynamic colour is unavailable.
+    Material 3 tonal look: desaturated purple primaries, muted teal secondary,
+    near-neutral surfaces. Compose consumes these names in EarpieceTheme.
+-->
+<resources>
+
+    <!-- Light -->
+    <color name="colorPrimaryLight">#FF6C5B8E</color>
+    <color name="colorOnPrimaryLight">#FFFFFFFF</color>
+    <color name="colorSecondaryLight">#FF4A6F6B</color>
+    <color name="colorSurfaceLight">#FFFBF8FD</color>
+    <color name="colorOnSurfaceLight">#FF1C1B1F</color>
+    <color name="colorSurfaceVariantLight">#FFE7E0EB</color>
+
+    <!-- Dark -->
+    <color name="colorPrimaryDark">#FFCFBCF5</color>
+    <color name="colorOnPrimaryDark">#FF3A2C56</color>
+    <color name="colorSecondaryDark">#FFB2CCC7</color>
+    <color name="colorSurfaceDark">#FF141218</color>
+    <color name="colorOnSurfaceDark">#FFE6E1E9</color>
+    <color name="colorSurfaceVariantDark">#FF49454E</color>
+
+</resources>

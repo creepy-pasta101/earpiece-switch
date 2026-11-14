@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <string name="app_name">Earpiece</string>
+    <string name="tile_label">Earpiece</string>
+
+    <!-- Routes -->
+    <string name="route_earpiece">Earpiece</string>
+    <string name="route_speaker">Speaker</string>
+    <string name="route_bluetooth">Bluetooth</string>
+    <string name="route_wired">Wired headset</string>
+
+    <string name="route_earpiece_desc">Private listening through the phone\'s ear speaker</string>
+    <string name="route_speaker_desc">Loud output for music and video</string>
+    <string name="route_bluetooth_desc">Connected Bluetooth headphones or speaker</string>
+    <string name="route_wired_desc">Plugged-in headset or headphones</string>
+
+    <!-- State chips -->
+    <string name="state_active">Active</string>
+    <string name="state_unavailable">Unavailable</string>
+    <string name="state_holding">Route held</string>
+    <string name="state_not_holding">Route not held</string>
+
+    <!-- Actions -->
+    <string name="action_test_tone">Test tone</string>
+    <string name="action_stop_tone">Stop tone</string>
+    <string name="action_hold_route">Hold route</string>
+    <string name="action_release_route">Release route</string>
+
+    <!-- Section headers -->
+    <string name="section_output">Output</string>
+    <string name="section_tools">Tools</string>
+
+    <!-- Preferences -->
+    <string name="pref_restore_on_boot">Restore after reboot</string>
+    <string name="pref_restore_on_boot_desc">Re-apply the last route when the phone starts</string>
+
+    <!-- Messages -->
+    <string name="downgrade_note">%1$s isn\'t available right now. Using %2$s.</string>
+    <string name="msg_route_applied">Audio moved to %1$s</string>
+    <string name="msg_route_failed">Couldn\'t switch to %1$s</string>
+    <string name="msg_bluetooth_denied">Bluetooth permission is needed to switch to Bluetooth</string>
+
+    <!-- Notification -->
+    <string name="notification_channel_name">Audio route</string>
+    <string name="notification_channel_description">Shows which audio output is being held</string>
+    <string name="notification_title">Audio route: %1$s</string>
+    <string name="notification_action_stop">Stop</string>
+
+    <!-- About -->
+    <string name="about_version">Version %1$s</string>
+    <string name="about_body">Holds a chosen audio output for every app on this device. No network access, no analytics, no ads.</string>
+
+    <!-- Accessibility -->
+    <string name="cd_active_route">Active audio route</string>
+
+</resources>

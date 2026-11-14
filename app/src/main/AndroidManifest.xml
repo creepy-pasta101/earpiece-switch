@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Earpiece — audio route switcher.
+    No `package` attribute: the namespace is supplied by the Gradle module
+    (namespace = "dev.creepypasta.earpiece").
+    Deliberately absent: INTERNET, ACCESS_NETWORK_STATE, BILLING, AD_ID.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Changing the audio mode / speakerphone state requires this. -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- The route is held by a media-playback foreground service. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- Android 13+ runtime permission for the ongoing route notification. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Needed on API 31+ to route to / enumerate Bluetooth audio devices. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- Used by BootReceiver to re-apply the held route after a reboot. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- The app is meaningless without an audio output. -->
+    <uses-feature
+        android:name="android.hardware.audio.output"
+        android:required="true" />
+
+    <application
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Earpiece">
+
+        <activity
+            android:name="dev.creepypasta.earpiece.MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Earpiece">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Started with explicit intents only; never exported. -->
+        <service
+            android:name="dev.creepypasta.earpiece.service.AudioRouteService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <!-- BOOT_COMPLETED is a protected broadcast, so exported="true" is required. -->
+        <receiver
+            android:name="dev.creepypasta.earpiece.service.BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Bound by the system; the BIND_QUICK_SETTINGS_TILE permission is what protects it. -->
+        <service
+            android:name="dev.creepypasta.earpiece.tile.RouteTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile_earpiece"
+            android:label="@string/tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="true" />
+        </service>
+
+    </application>
+
+</manifest>

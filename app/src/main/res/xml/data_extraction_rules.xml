@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    API 31+ backup / transfer rules.
+    Both sections are intentionally empty, which means "everything in the app's
+    data directory" — the same policy as backup_rules.xml. No <exclude> entries
+    because there is nothing sensitive to keep out: the app holds no network
+    permission and stores only a route key and a boolean.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+    </cloud-backup>
+    <device-transfer>
+    </device-transfer>
+</data-extraction-rules>
