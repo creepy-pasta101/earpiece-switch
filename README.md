@@ -60,15 +60,37 @@ Nothing else. There is no network permission, so the app cannot phone home even 
 
 ## How routing works
 
-On Android 12+ the app uses the public device-selection API (`AudioManager.setCommunicationDevice`).
-On Android 8–11 it uses the audio mode plus the speakerphone and SCO flags. The earpiece route
-requires a communication audio mode — that is the only way the platform allows media to play through
-the ear speaker — and the previous mode is restored when the route is released.
+The earpiece route needs the platform in a communication audio mode — that is the only lever an
+ordinary app has for getting media into the ear speaker — so the app enters that mode and sets the
+speakerphone flag, and restores the previous mode when the route is released. On Android 12+ it
+*additionally* uses the public device-selection API (`AudioManager.setCommunicationDevice`) to pin
+the communication device and to read the active route back.
 
-After every switch the app reads the route back from the platform. If the platform did not honour
-the request, the app says so instead of pretending it worked. When the hardware for a route
-disappears (headphones unplugged, Bluetooth dropped) the app falls back in a fixed order and tells
-you which route it actually used.
+Both mechanisms are applied on every switch, deliberately. `setCommunicationDevice` alone is not
+enough: it selects the device for *this app's* communication audio and returns `true` even when the
+media you are listening to in another app does not move at all.
+
+After every switch the app reads the route back from the platform and retries once if the first
+read disagrees, because audio policy can lag a transition. If the route still did not take, the app
+says so instead of pretending it worked. When the hardware for a route disappears (headphones
+unplugged, Bluetooth dropped) the app falls back in a fixed order and tells you which route it
+actually used. A watchdog re-asserts the held route every few seconds, and stands down during a
+phone call.
+
+## Known platform limits
+
+Android has no public API that forces *system-wide* media routing. Everything this app does is a
+sanctioned side effect of the communication audio mode, which is how this whole category of app
+works — and it means two things you should know:
+
+- **It works on most devices, not all.** Some OEM audio policies ignore the mode for media, and the
+  speakerphone flag is deprecated from API 34. When the platform refuses, the app now tells you
+  instead of silently doing nothing.
+- **Nothing is forced during a call.** The watchdog stands down while the phone is in a call, so
+  the app will not hijack your call audio.
+
+The route you asked for and the route the platform confirmed are both shown: a card is only marked
+active once the platform has been read back and agrees.
 
 ## Layout
 

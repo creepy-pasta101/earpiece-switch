@@ -16,9 +16,15 @@ import dev.creepypasta.earpiece.model.RouteResolver
 /**
  * Owns every interaction with [AudioManager].
  *
- * Two platform generations are handled:
- *  - API 31+ (S): public device-selection API ([AudioManager.setCommunicationDevice]).
+ * Two platform generations are handled, but both are always driven through the same
+ * two mechanisms:
+ *  - API 31+ (S): the public device-selection API ([AudioManager.setCommunicationDevice]).
  *  - API 26..30: the legacy audio-mode / speakerphone / SCO flags.
+ *
+ * The device-selection API alone is not enough: it selects the communication device for
+ * *this* app's audio only. Moving media played by *other* apps is the whole purpose of
+ * this app, and that still requires the legacy [AudioManager.setMode] +
+ * [AudioManager.setSpeakerphoneOn] pair. So every branch applies both, unconditionally.
  *
  * No exception is ever allowed to escape a public method: audio APIs throw
  * [SecurityException] when a permission (BLUETOOTH_CONNECT, MODIFY_AUDIO_SETTINGS)
@@ -87,8 +93,39 @@ class AudioRouteManager(context: Context) {
     }
 
     /**
+     * The routes the current capabilities support, in [AudioRoute.all] order.
+     * Backs the UI diagnostics line.
+     */
+    fun availableRoutes(): List<AudioRoute> {
+        val caps = capabilities()
+        return AudioRoute.all.filter { caps.supports(it) }
+    }
+
+    /**
+     * True while the platform is in a telephony call.
+     *
+     * The route watchdog uses this to stand down: forcing an audio mode or a device while a
+     * call is up would fight the telephony stack for the audio path, and the user's call is
+     * more important than the route this app is holding.
+     */
+    fun isCallActive(): Boolean {
+        val am = audioManager ?: return false
+        return try {
+            am.mode == AudioManager.MODE_IN_CALL
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "isCallActive failed", e)
+            false
+        }
+    }
+
+    /**
      * Resolves [route] against the live capabilities, applies the effective
      * route and returns the *verified* active route read back from the platform.
+     *
+     * The platform's audio policy can lag a transition by a few hundred milliseconds,
+     * so a single read-back is not proof. If the first read-back disagrees with the
+     * requested route the branch is applied once more and read back again; the route is
+     * only reported when it was actually observed.
      *
      * @return the verified route, or null when the switch was refused/failed.
      */
@@ -100,22 +137,43 @@ class AudioRouteManager(context: Context) {
 
         captureStateOnce(am)
 
-        val applied = try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                applyModern(am, effective)
-            } else {
-                applyLegacy(am, effective)
-            }
-        } catch (e: SecurityException) {
-            Log.w(TAG, "apply($route) denied", e)
-            false
-        } catch (e: RuntimeException) {
-            Log.w(TAG, "apply($route) failed", e)
-            false
+        if (!attemptApply(am, effective)) return null
+
+        val first = currentRoute()
+        if (first == effective) return first
+
+        // The policy has not committed the change yet. Sleeping on this thread is
+        // acceptable because apply() is always called from a background dispatcher.
+        try {
+            Thread.sleep(RETRY_DELAY_MS)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            Log.w(TAG, "apply($route) interrupted before retry", e)
+            return null
         }
 
-        if (!applied) return null
-        return currentRoute()
+        if (!attemptApply(am, effective)) return null
+
+        val second = currentRoute()
+        if (second == effective) return second
+
+        Log.w(TAG, "apply($route) unverified: wanted $effective, platform reports $second")
+        return null
+    }
+
+    /** Runs one platform branch; never lets a platform exception escape. */
+    private fun attemptApply(am: AudioManager, route: AudioRoute): Boolean = try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            applyModern(am, route)
+        } else {
+            applyLegacy(am, route)
+        }
+    } catch (e: SecurityException) {
+        Log.w(TAG, "apply($route) denied", e)
+        false
+    } catch (e: RuntimeException) {
+        Log.w(TAG, "apply($route) failed", e)
+        false
     }
 
     /** Best read-back of the platform's actual output state. */
@@ -125,7 +183,11 @@ class AudioRouteManager(context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 val mapped = mapCommunicationDevice(am)
                 if (mapped != null) return mapped
-                // communicationDevice is null -> no explicit selection; fall through.
+                // communicationDevice is null -> no explicit selection was made. That is
+                // the normal outcome of the legacy-flag path (MODE_IN_COMMUNICATION plus
+                // isSpeakerphoneOn=false reroutes other apps' media without ever setting a
+                // communication device), so the heuristic below must be able to report
+                // EARPIECE from the mode and the flag alone.
             }
             legacyHeuristic(am)
         } catch (e: SecurityException) {
@@ -180,10 +242,13 @@ class AudioRouteManager(context: Context) {
     // -------------------------------------------------------------- lifecycle
 
     /**
-     * Restores the audio mode (and, below API 31, the speakerphone flag) that the
-     * platform had before the first [apply], then forgets it so a later [apply]
-     * captures fresh values.
+     * Restores the audio mode and the speakerphone flag that the platform had before the
+     * first [apply], then forgets them so a later [apply] captures fresh values.
+     *
+     * The speakerphone flag is restored on every API level: [applyModern] sets it on 31+
+     * too, so leaving it set would keep the device in a state this app did not find it in.
      */
+    @Suppress("DEPRECATION")
     fun release() {
         stopObserving()
         val am = audioManager
@@ -193,9 +258,9 @@ class AudioRouteManager(context: Context) {
                     am.clearCommunicationDevice()
                 }
                 savedMode?.let { am.mode = it }
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-                    savedSpeakerphoneOn?.let { am.isSpeakerphoneOn = it }
-                }
+                // isSpeakerphoneOn is deprecated but still the flag that moves other apps'
+                // media, so it has to be put back exactly as it was found.
+                savedSpeakerphoneOn?.let { am.isSpeakerphoneOn = it }
             } catch (e: SecurityException) {
                 Log.w(TAG, "release denied", e)
             } catch (e: RuntimeException) {
@@ -209,19 +274,29 @@ class AudioRouteManager(context: Context) {
 
     // ----------------------------------------------------------- API 31+ path
 
+    /**
+     * API 31+ branches apply BOTH mechanisms in this order: the legacy mode/flag pair
+     * first (that is what reroutes other apps' media) and the communication-device
+     * selection second (that pins this app's own communication audio).
+     *
+     * isSpeakerphoneOn / isBluetoothScoOn / startBluetoothSco are deprecated on 31+ but
+     * still required: without them the device selection only affects this app's audio,
+     * which is the bug this class exists to fix.
+     */
     @RequiresApi(Build.VERSION_CODES.S)
+    @Suppress("DEPRECATION")
     private fun applyModern(am: AudioManager, route: AudioRoute): Boolean = when (route) {
         AudioRoute.EARPIECE -> {
             am.mode = AudioManager.MODE_IN_COMMUNICATION
+            // The legacy flag is what actually moves other apps' media to the earpiece.
+            am.isSpeakerphoneOn = false
             val earpiece = findOutputDevice(am, AudioDeviceInfo.TYPE_BUILTIN_EARPIECE)
-            val selected = earpiece != null && am.setCommunicationDevice(earpiece)
-            if (!selected) {
-                // No earpiece device, or the platform refused the selection.
-                am.isSpeakerphoneOn = false
-                false
-            } else {
-                true
-            }
+                ?: return false
+            // Pins this app's communication audio too. Its return value is deliberately
+            // ignored: the legacy flag above may be doing the work on its own, so a false
+            // here does not mean the route failed - currentRoute() is the judge.
+            am.setCommunicationDevice(earpiece)
+            true
         }
 
         AudioRoute.SPEAKER -> {
@@ -239,9 +314,13 @@ class AudioRouteManager(context: Context) {
             val anyBluetooth = sco != null ||
                 findOutputDevice(am, AudioDeviceInfo.TYPE_BLUETOOTH_A2DP) != null
             if (!anyBluetooth) {
-                false
-            } else if (sco != null && am.mode == AudioManager.MODE_IN_COMMUNICATION) {
+                return false
+            }
+            am.isSpeakerphoneOn = false
+            if (sco != null && am.mode == AudioManager.MODE_IN_COMMUNICATION) {
                 am.setCommunicationDevice(sco)
+                am.isBluetoothScoOn = true
+                am.startBluetoothSco()
             } else {
                 // A2DP is routed automatically; drop any explicit selection.
                 am.clearCommunicationDevice()
@@ -254,6 +333,7 @@ class AudioRouteManager(context: Context) {
             // A wired headset is auto-routed for media; just drop the selection.
             am.clearCommunicationDevice()
             stopSco(am)
+            am.isSpeakerphoneOn = false
             am.mode = AudioManager.MODE_NORMAL
             true
         }
@@ -276,6 +356,14 @@ class AudioRouteManager(context: Context) {
 
     // -------------------------------------------------------- API 26..30 path
 
+    /**
+     * API 26..30 branches use only the legacy flags, but mirror the modern order so the
+     * two paths behave identically.
+     *
+     * isSpeakerphoneOn / isBluetoothScoOn / startBluetoothSco are deprecated but are the
+     * only routing mechanism that exists below API 31.
+     */
+    @Suppress("DEPRECATION")
     private fun applyLegacy(am: AudioManager, route: AudioRoute): Boolean = when (route) {
         AudioRoute.EARPIECE -> {
             // Leave SCO on and the headset keeps the audio: the mode change alone does not
@@ -322,9 +410,9 @@ class AudioRouteManager(context: Context) {
         stateCaptured = true
         try {
             savedMode = am.mode
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-                savedSpeakerphoneOn = am.isSpeakerphoneOn
-            }
+            // Captured on every API level: applyModern() sets the flag on 31+ as well, so
+            // release() must be able to put it back there too.
+            savedSpeakerphoneOn = am.isSpeakerphoneOn
         } catch (e: SecurityException) {
             Log.w(TAG, "captureState denied", e)
         } catch (e: RuntimeException) {
@@ -341,6 +429,7 @@ class AudioRouteManager(context: Context) {
      * the mode in communication, a connected A2DP sink does not take the audio, so
      * reporting BLUETOOTH there would be a false negative for a working earpiece route.
      */
+    @Suppress("DEPRECATION")
     private fun legacyHeuristic(am: AudioManager): AudioRoute {
         if (am.isBluetoothScoOn) return AudioRoute.BLUETOOTH
         if (findOutputDevice(am, AudioDeviceInfo.TYPE_WIRED_HEADSET) != null ||
@@ -393,5 +482,8 @@ class AudioRouteManager(context: Context) {
 
     private companion object {
         const val TAG = "Earpiece"
+
+        /** Grace period given to the audio policy before the single re-apply. */
+        const val RETRY_DELAY_MS = 250L
     }
 }

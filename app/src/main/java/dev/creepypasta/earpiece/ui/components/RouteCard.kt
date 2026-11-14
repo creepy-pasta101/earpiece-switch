@@ -62,7 +62,12 @@ private fun AudioRoute.icon(): ImageVector = when (this) {
  * it can be previewed and reused without a view model. The card is not given a
  * click handler through `Card(onClick = ...)`; instead the whole surface is made
  * `selectable`, which gives it the correct "selected" semantics for a radio-like
- * group and disables it cleanly when the route is unavailable.
+ * group.
+ *
+ * [available] is presentation only: it dims the card and swaps the trailing chip
+ * for the "Unavailable" label. It deliberately does *not* disable the click —
+ * tapping an unavailable route must reach the caller so it can explain why the
+ * route cannot be used, rather than swallowing the tap.
  */
 @Composable
 fun RouteCard(
@@ -88,7 +93,6 @@ fun RouteCard(
             .fillMaxWidth()
             .selectable(
                 selected = selected,
-                enabled = available,
                 role = Role.RadioButton,
                 onClick = onClick,
             ),
