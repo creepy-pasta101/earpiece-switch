@@ -33,6 +33,7 @@ import dev.creepypasta.earpiece.BuildConfig
 import dev.creepypasta.earpiece.R
 import dev.creepypasta.earpiece.model.AudioRoute
 import dev.creepypasta.earpiece.model.RouteResolver
+import dev.creepypasta.earpiece.state.RouteFailure
 import dev.creepypasta.earpiece.ui.components.RouteCard
 import dev.creepypasta.earpiece.ui.components.labelRes
 
@@ -53,6 +54,7 @@ fun MainScreen(
     onRestoreOnBootChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     onMessageShown: () -> Unit = {},
+    onOutcomeShown: () -> Unit = {},
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val message = state.message
@@ -65,6 +67,34 @@ fun MainScreen(
             // Consume only after the snackbar has actually been shown, so a
             // reconfiguration in between does not lose the message.
             onMessageShown()
+        }
+    }
+
+    // Every switch attempt now reports back, so the screen has something to say
+    // about all four outcomes: applied, applied-but-downgraded, unavailable, and
+    // a service that could not start.
+    val outcome = state.outcome
+    val outcomeText = if (outcome == null) {
+        null
+    } else {
+        val applied = outcome.applied
+        val requestedLabel = stringResource(outcome.requested.labelRes())
+        when {
+            applied != null && applied == outcome.requested ->
+                stringResource(R.string.msg_route_applied, stringResource(applied.labelRes()))
+            applied != null ->
+                stringResource(R.string.downgrade_note, requestedLabel, stringResource(applied.labelRes()))
+            outcome.failure == RouteFailure.NOT_AVAILABLE ->
+                stringResource(R.string.msg_route_unavailable, requestedLabel)
+            outcome.failure == RouteFailure.SERVICE -> stringResource(R.string.msg_route_service_failed)
+            else -> stringResource(R.string.msg_route_failed, requestedLabel)
+        }
+    }
+
+    LaunchedEffect(outcome?.id) {
+        if (outcomeText != null) {
+            snackbarHostState.showSnackbar(outcomeText)
+            onOutcomeShown()
         }
     }
 
@@ -102,6 +132,9 @@ fun MainScreen(
             AudioRoute.all.forEach { route ->
                 // A route is available exactly when resolving it needs no
                 // downgrade; that reuses the same rules the audio layer applies.
+                // The flag only drives the card's look — the click is always
+                // forwarded, so an unavailable route answers with a snackbar
+                // instead of swallowing the tap.
                 val available = !RouteResolver.resolve(route, state.capabilities).downgraded
                 RouteCard(
                     route = route,
@@ -110,6 +143,22 @@ fun MainScreen(
                     onClick = { onSelect(route) },
                 )
             }
+
+            // Diagnostics: the outputs this device reports right now. It is a
+            // screenshot-legible answer to "why is this card greyed out?".
+            val detectedRoutes = AudioRoute.all
+                .filter { route -> !RouteResolver.resolve(route, state.capabilities).downgraded }
+            val detectedText = if (detectedRoutes.isEmpty()) {
+                stringResource(state.active.labelRes())
+            } else {
+                detectedRoutes.map { route -> stringResource(route.labelRes()) }.joinToString(", ")
+            }
+            Text(
+                text = stringResource(R.string.section_output) + ": " + detectedText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 4.dp),
+            )
 
             Spacer(modifier = Modifier.height(16.dp))
             SectionLabel(textRes = R.string.section_tools)

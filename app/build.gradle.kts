@@ -41,6 +41,16 @@ android {
         buildConfig = true
     }
 
+    // JVM unit tests run against Robolectric so the route wiring can be asserted on
+    // without a device: the test needs the real resources (labels, messages) and the
+    // real android.* behaviour that Robolectric shadows provide instead of stubs.
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            isReturnDefaultValues = true
+        }
+    }
+
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
@@ -71,4 +81,9 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     testImplementation(libs.junit)
+    // Declared here rather than in the version catalog on purpose: these three are
+    // test-only and the catalog file is owned by another change.
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.test:core-ktx:1.6.1")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
 }

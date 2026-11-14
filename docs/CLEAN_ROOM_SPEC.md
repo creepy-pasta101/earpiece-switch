@@ -274,3 +274,10 @@ Permissions retained by the rebuild, each justified:
 3. Volume: the earpiece is physically quieter than the loudspeaker. This rebuild does not
    raise volume above the user's setting, and does not request `MODIFY_AUDIO_SETTINGS`
    privileges beyond mode and route selection.
+4. **System-wide media routing has no public API.** `AudioManager.setCommunicationDevice`
+   selects the device for the calling app's *communication* audio only; it returns `true`
+   without moving media played by other applications. The only lever an ordinary app has is
+   the communication audio mode plus the speakerphone flag, which is deprecated from API 34
+   and honoured by OEM audio policy on most, but not all, devices. R1.2 therefore requires
+   **both** mechanisms to be applied together, and R1.6 requires the read-back so that a
+   device which ignores the mode reports failure instead of a false success.

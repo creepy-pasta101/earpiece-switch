@@ -11,6 +11,8 @@ import dev.creepypasta.earpiece.model.AudioRoute
 import dev.creepypasta.earpiece.model.RouteCapabilities
 import dev.creepypasta.earpiece.model.RouteResolver
 import dev.creepypasta.earpiece.service.AudioRouteService
+import dev.creepypasta.earpiece.state.RouteFailure
+import dev.creepypasta.earpiece.state.RouteOutcome
 import dev.creepypasta.earpiece.state.RouteState
 import dev.creepypasta.earpiece.ui.components.labelRes
 import kotlinx.coroutines.CoroutineScope
@@ -32,6 +34,7 @@ data class MainUiState(
     val tonePlaying: Boolean,
     val restoreOnBoot: Boolean,
     val message: UiMessage?,
+    val outcome: RouteOutcome?,
 )
 
 /**
@@ -64,14 +67,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val restoreOnBoot = MutableStateFlow(prefs.restoreOnBoot)
     private val message = MutableStateFlow<UiMessage?>(null)
 
-    /** The four shared route flows, folded once so the outer combine stays small. */
+    /**
+     * The five shared route flows, folded once so the outer combine stays small.
+     * The reported outcome belongs here rather than in the outer combine: it is
+     * part of the same shared state and folding it keeps the outer combine at
+     * four sources, which is all the typed `combine` overloads allow.
+     */
     private val routeSnapshot = combine(
         RouteState.requested,
         RouteState.active,
         RouteState.capabilities,
         RouteState.serviceRunning,
-    ) { requested, active, capabilities, serviceRunning ->
-        RouteSnapshot(requested, active, capabilities, serviceRunning)
+        RouteState.outcome,
+    ) { requested, active, capabilities, serviceRunning, outcome ->
+        RouteSnapshot(requested, active, capabilities, serviceRunning, outcome)
     }
 
     val state: StateFlow<MainUiState> = combine(
@@ -88,6 +97,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             tonePlaying = tone,
             restoreOnBoot = restore,
             message = msg,
+            outcome = routes.outcome,
         )
     }.stateIn(
         scope = scope,
@@ -100,6 +110,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             tonePlaying = false,
             restoreOnBoot = prefs.restoreOnBoot,
             message = null,
+            outcome = RouteState.outcome.value,
         ),
     )
 
@@ -123,15 +134,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * Requests [route]: persists it, mirrors it into the shared state, stops any
      * running test tone, and hands the actual switch to the foreground service,
      * which is the component that owns the held route.
+     *
+     * The request is resolved against the current capabilities *first*. A route
+     * this device cannot honour is reported back as an explicit
+     * [RouteFailure.NOT_AVAILABLE] outcome and the service is never started, so
+     * a tap on an unavailable card explains itself instead of doing nothing.
      */
     fun select(route: AudioRoute) {
+        val resolution = RouteResolver.resolve(route, RouteState.capabilities.value)
+        if (resolution.downgraded) {
+            RouteState.publishOutcome(
+                RouteOutcome(
+                    id = System.nanoTime(),
+                    requested = route,
+                    applied = null,
+                    failure = RouteFailure.NOT_AVAILABLE,
+                ),
+            )
+            return
+        }
+
         prefs.requestedRoute = route
         RouteState.publishRequested(route)
         stopToneIfPlaying()
 
         // A Bluetooth request that the platform cannot honour is almost always a
         // missing adapter or a denied permission, which deserves its own message.
-        val resolution = RouteResolver.resolve(route, RouteState.capabilities.value)
         if (route == AudioRoute.BLUETOOTH && resolution.effective != AudioRoute.BLUETOOTH) {
             emit(R.string.msg_bluetooth_denied)
         }
@@ -196,6 +224,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         message.value = null
     }
 
+    /** Called by the UI once the snackbar for the current route outcome has been shown. */
+    fun consumeOutcome() {
+        RouteState.consumeOutcome()
+    }
+
     override fun onCleared() {
         tonePlaying.value = false
         try {
@@ -252,6 +285,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val active: AudioRoute,
         val capabilities: RouteCapabilities,
         val serviceRunning: Boolean,
+        val outcome: RouteOutcome?,
     )
 
     private companion object {

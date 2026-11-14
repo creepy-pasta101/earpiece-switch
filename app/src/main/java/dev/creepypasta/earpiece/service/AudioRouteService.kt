@@ -1,10 +1,12 @@
 package dev.creepypasta.earpiece.service
 
+import android.Manifest
 import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.media.AudioManager
 import android.os.Build
@@ -17,11 +19,15 @@ import dev.creepypasta.earpiece.data.RoutePreferences
 import dev.creepypasta.earpiece.model.AudioRoute
 import dev.creepypasta.earpiece.model.RouteCapabilities
 import dev.creepypasta.earpiece.model.RouteResolver
+import dev.creepypasta.earpiece.state.RouteFailure
+import dev.creepypasta.earpiece.state.RouteOutcome
 import dev.creepypasta.earpiece.state.RouteState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -29,7 +35,8 @@ import kotlinx.coroutines.launch
  *
  * All platform audio work happens on [audioScope] (Dispatchers.Default) because applying a route
  * touches AudioManager/AudioTrack and must never block the main thread. Results are published to
- * [RouteState] so the UI and the Quick Settings tile stay in sync.
+ * [RouteState] so the UI and the Quick Settings tile stay in sync: every apply attempt publishes a
+ * [RouteOutcome], success or failure, and a watchdog re-asserts the route while we are foreground.
  */
 class AudioRouteService : Service() {
 
@@ -41,6 +48,12 @@ class AudioRouteService : Service() {
 
     private var foregroundStarted = false
     private var noisyReceiverRegistered = false
+
+    /** The service-start failure is reported once per instance, not on every onStartCommand. */
+    private var serviceFailurePublished = false
+
+    /** Only one watchdog loop per service instance. */
+    private var watchdogStarted = false
 
     /**
      * Headphones were unplugged / a Bluetooth device dropped: the platform has already moved
@@ -140,6 +153,7 @@ class AudioRouteService : Service() {
 
         manager.stopObserving()
         manager.release()
+        // Cancels the watchdog loop along with everything else this service started.
         audioScope.cancel()
         super.onDestroy()
     }
@@ -164,24 +178,46 @@ class AudioRouteService : Service() {
             if (!foregroundStarted) {
                 foregroundStarted = true
                 RouteState.publishServiceRunning(true)
+                startWatchdog()
             }
         } catch (e: RuntimeException) {
             // ForegroundServiceStartNotAllowedException and friends: never crash the process over it.
             Log.w(TAG, "startForeground rejected", e)
+            publishServiceFailureOnce(route)
         }
     }
 
     /**
-     * Resolves and applies [route] off the main thread.
+     * Tells the UI once per service instance that the service could not go foreground, which is
+     * the one failure the user cannot otherwise see: no notification, and no route applied.
+     */
+    private fun publishServiceFailureOnce(route: AudioRoute) {
+        if (serviceFailurePublished) return
+        serviceFailurePublished = true
+        RouteState.publishOutcome(
+            RouteOutcome(
+                id = System.nanoTime(),
+                requested = route,
+                applied = null,
+                failure = RouteFailure.SERVICE,
+            ),
+        )
+    }
+
+    /**
+     * Resolves and applies [route] off the main thread, publishing the outcome of the attempt.
      *
      * On failure (apply returned null, e.g. denied Bluetooth permission) we deliberately leave
-     * [RouteState.active] untouched — the UI reports the failure from the unchanged value and the
-     * previous route is still the honest one.
+     * [RouteState.active] untouched — the previous route is still the honest one — and report why
+     * the attempt failed instead.
      */
     private fun applyRoute(route: AudioRoute) {
         audioScope.launch {
+            var caps: RouteCapabilities? = null
             val resolved = try {
-                RouteResolver.resolve(route, manager.capabilities())
+                val live = manager.capabilities()
+                caps = live
+                RouteResolver.resolve(route, live)
             } catch (e: RuntimeException) {
                 Log.w(TAG, "Capability read failed for $route", e)
                 null
@@ -198,6 +234,14 @@ class AudioRouteService : Service() {
             }
 
             if (applied != null) {
+                RouteState.publishOutcome(
+                    RouteOutcome(
+                        id = System.nanoTime(),
+                        requested = route,
+                        applied = applied,
+                        failure = RouteFailure.NONE,
+                    ),
+                )
                 RouteState.publishActive(applied)
                 // The resolver's requested value is what the user actually asked for; publishing it
                 // lets the UI show the downgrade note when effective != requested.
@@ -206,11 +250,107 @@ class AudioRouteService : Service() {
                 }
                 Log.i(TAG, "Route applied: requested=$route active=$applied")
             } else {
+                val failure = failureReason(route, caps)
+                RouteState.publishOutcome(
+                    RouteOutcome(
+                        id = System.nanoTime(),
+                        requested = route,
+                        applied = null,
+                        failure = failure,
+                    ),
+                )
                 if (resolved != null) {
                     RouteState.publishRequested(resolved.requested)
                 }
-                Log.w(TAG, "Route apply returned null for $route; keeping previous active route")
+                Log.w(TAG, "Route apply returned null for $route ($failure); keeping previous active route")
             }
+        }
+    }
+
+    /**
+     * Why [route] could not be applied, in the order the UI cares about: unsupported hardware,
+     * then a missing runtime permission, then everything else the platform did.
+     */
+    private fun failureReason(route: AudioRoute, caps: RouteCapabilities?): RouteFailure = when {
+        caps != null && !caps.supports(route) -> RouteFailure.NOT_AVAILABLE
+        route == AudioRoute.BLUETOOTH && !hasBluetoothConnectPermission() -> RouteFailure.PERMISSION
+        else -> RouteFailure.PLATFORM
+    }
+
+    /**
+     * BLUETOOTH_CONNECT only exists from API 31; on older platforms Bluetooth routing needs no
+     * runtime permission, so the answer there is "we hold it".
+     */
+    private fun hasBluetoothConnectPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+        return try {
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_CONNECT,
+            ) == PackageManager.PERMISSION_GRANTED
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "Bluetooth permission check failed", e)
+            false
+        }
+    }
+
+    /**
+     * Starts the drift watchdog, once per instance, on [audioScope] so onDestroy's cancel() stops it.
+     * It never runs before the service is foreground: a route we cannot hold yet is not a drift.
+     */
+    private fun startWatchdog() {
+        if (watchdogStarted) return
+        watchdogStarted = true
+        audioScope.launch {
+            while (isActive) {
+                delay(WATCHDOG_INTERVAL_MS)
+                if (!foregroundStarted) continue
+                reassertIfDrifted()
+            }
+        }
+    }
+
+    /**
+     * Silently re-applies the requested route when the platform has moved output elsewhere (another
+     * app grabbing focus, a device change, an OEM audio policy quirk). No outcome is published here:
+     * the user did not ask for this, so a snackbar per drift would be noise.
+     */
+    private fun reassertIfDrifted() {
+        // Never fight an active phone call for the audio path. The user's call wins over
+        // whatever route this app is holding; the route is re-asserted once the call ends.
+        if (manager.isCallActive()) return
+
+        val requested = prefs.requestedRoute
+
+        val expected = try {
+            RouteResolver.resolve(requested, manager.capabilities()).effective
+        } catch (e: RuntimeException) {
+            Log.d(TAG, "Watchdog could not resolve $requested", e)
+            requested
+        }
+
+        val current = try {
+            manager.currentRoute()
+        } catch (e: RuntimeException) {
+            Log.d(TAG, "Watchdog could not read the current route", e)
+            return
+        }
+
+        if (current == expected) return
+
+        Log.d(TAG, "Watchdog: route drifted from $expected to $current; re-asserting $requested")
+        val applied = try {
+            manager.apply(requested)
+        } catch (e: SecurityException) {
+            Log.d(TAG, "Watchdog re-apply($requested) denied", e)
+            null
+        } catch (e: RuntimeException) {
+            Log.d(TAG, "Watchdog re-apply($requested) failed", e)
+            null
+        }
+        // Keep the published active route honest, but stay silent: no outcome, no snackbar.
+        if (applied != null) {
+            RouteState.publishActive(applied)
         }
     }
 
@@ -235,6 +375,9 @@ class AudioRouteService : Service() {
 
     companion object {
         private const val TAG = "Earpiece"
+
+        /** How often the foreground watchdog compares the live route with the requested one. */
+        private const val WATCHDOG_INTERVAL_MS = 4_000L
 
         const val ACTION_APPLY = "dev.creepypasta.earpiece.action.APPLY"
         const val ACTION_RELEASE = "dev.creepypasta.earpiece.action.RELEASE"
