@@ -1,0 +1,40 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+.kotlin/
+
+# Local configuration (SDK path, machine-specific settings)
+local.properties
+
+# IDE
+.idea/
+!.idea/codeStyles/
+!.idea/inspectionProfiles/
+*.iml
+*.ipr
+*.iws
+
+# Android build output
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Signing material — never commit these
+*.keystore
+*.jks
+keystore.properties
+signing.properties
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# DELIBERATELY COMMITTED
+# gradle/wrapper/gradle-wrapper.jar and the gradlew scripts stay in the repository so that
+# a clean checkout builds with no pre-installed Gradle. Do not add them to this file.

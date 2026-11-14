@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    XML theme only: the real theming lives in Compose (EarpieceTheme).
+    This exists so the activity has a sane window before the first frame.
+    No AppCompat / Material Components dependency, so the parent is a plain
+    platform theme.
+-->
+<resources>
+
+    <style name="Theme.Earpiece" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/colorSurfaceLight</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+
+</resources>

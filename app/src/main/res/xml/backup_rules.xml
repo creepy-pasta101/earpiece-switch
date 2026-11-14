@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Auto Backup (API 23-30) rules.
+    Nothing is excluded on purpose: the only persisted state is
+    shared_prefs/route_prefs.xml (last route + restore-on-boot), which we DO
+    want restored onto a new device. No accounts, no tokens, no caches.
+-->
+<full-backup-content>
+</full-backup-content>

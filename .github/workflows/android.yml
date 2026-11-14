@@ -1,0 +1,74 @@
+name: Android CI
+
+on:
+  # Feature branches are covered by the pull_request trigger; building them on push as
+  # well would run every commit twice and upload duplicate artifacts.
+  push:
+    branches: [main]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build APKs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make the Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Run unit tests
+        run: ./gradlew --no-daemon --stacktrace testDebugUnitTest
+
+      - name: Assemble debug and release APKs
+        run: ./gradlew --no-daemon --stacktrace assembleDebug assembleRelease
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: earpiece-apks
+          path: app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: app/build/reports/tests/**
+          if-no-files-found: ignore
+
+      - name: Write the job summary
+        if: always()
+        run: |
+          echo "## APK artifacts" >> "$GITHUB_STEP_SUMMARY"
+          apks=$(find app/build/outputs/apk -name '*.apk' 2>/dev/null || true)
+          if [ -z "$apks" ]; then
+            echo "_No APKs were produced in this run._" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "$apks" | while IFS= read -r apk; do
+              echo "- \`$apk\` ($(du -h "$apk" | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
+            done
+          fi
