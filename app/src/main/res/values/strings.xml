@@ -17,6 +17,10 @@
     <string name="route_bluetooth_desc">Connected Bluetooth headphones or speaker</string>
     <string name="route_wired_desc">Plugged-in headset or headphones</string>
 
+    <!-- Experimental: the dummy media route offered in the system output switcher -->
+    <string name="route_provider_name">Earpiece</string>
+    <string name="route_provider_description">Switches this phone\'s audio to the earpiece</string>
+
     <!-- State chips -->
     <string name="state_active">Active</string>
     <string name="state_unavailable">Unavailable</string>
